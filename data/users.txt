@@ -1,0 +1,1 @@
+{"id":"e87cd6a9-d264-4bd0-9266-07eb4262d439","email":"alice@example.com","passHash":"$2b$10$mhquCRQE3WPL15k7hUA50ujbbs5zGsWLMVKJb5n7rYGrTMypozAlu","roles":["user"],"extraPermissions":[],"mfaEnabled":true,"failedLoginAttempts":0,"lockedUntil":0,"createdAt":"2025-10-24T07:04:26.590Z","updatedAt":"2025-10-24T07:19:25.920Z","mfaSecret":"GNZDWBRZNMHHIWLH"}

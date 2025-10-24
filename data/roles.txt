@@ -1,0 +1,4 @@
+{"name":"admin","permissions":["role:read","role:list","role:assign","session:list","session:invalidate","mfa:setup","mfa:verify","auth:login","auth:logout","audit:read","oauth:read","oauth:list","oauth:delete","user:*"],"description":"Preset admin"}
+{"name":"security-analyst","permissions":["user:read","user:list","role:read","role:list","session:read","session:list","session:invalidate","audit:read"],"description":"Preset security-analyst"}
+{"name":"support","permissions":["user:read","user:list","mfa:verify","auth:login","auth:logout"],"description":"Preset support"}
+{"name":"user","permissions":["user:read","user:update","mfa:setup","mfa:verify","auth:login","auth:logout"],"description":"Preset user"}

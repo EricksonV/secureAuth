@@ -2,8 +2,10 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*'   # se ejecuta cuando se hace push de un tag que empieza con v (p.ej. v1.0.0)
+    tags: ['v*']           # como ahora
+  release:
+    types: [published]     # si creas un Release desde la UI
+  workflow_dispatch:       # botón “Run workflow” manual
 
 jobs:
   build-and-release:

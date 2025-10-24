@@ -2,7 +2,7 @@ name: Release
 
 on:
   push:
-    tags: ['v*']
+    tags: ['v*']          # corre al pushear tags que empiezan con v (v1.0.1)
   workflow_dispatch:
     inputs:
       tag:
@@ -10,7 +10,7 @@ on:
         required: false
         default: ''
 
-# 👇 clave: dar permisos de escritura al token del workflow
+# Permisos para que GITHUB_TOKEN pueda escribir contenidos/release
 permissions:
   contents: write
 
@@ -24,12 +24,29 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Detect lockfile para decidir ci/install y cache
+      - name: Detect lockfile
+        id: detect-lock
+        shell: bash
+        run: |
+          if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ] || [ -f yarn.lock ]; then
+            echo "has_lock=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_lock=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Use Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: ${{ steps.detect-lock.outputs.has_lock == 'true' && 'npm' || '' }}
 
-      - name: Install deps
+      - name: Install deps (npm ci)
+        if: steps.detect-lock.outputs.has_lock == 'true'
+        run: npm ci
+
+      - name: Install deps (npm install)
+        if: steps.detect-lock.outputs.has_lock != 'true'
         run: npm install
 
       - name: Typecheck
@@ -51,14 +68,18 @@ jobs:
             echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Create Release
-        uses: ncipollo/release-action@v1
-        with:
-          artifacts: dist.tar.gz
-          # 👉 usa GH_RELEASE_TOKEN si existe; si no, GITHUB_TOKEN
-          token: ${{ secrets.GH_RELEASE_TOKEN != '' && secrets.GH_RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
-          tag: ${{ steps.tag.outputs.tag }}
-          name: ${{ steps.tag.outputs.tag }}
-          draft: false
-          prerelease: false
-
+      # ⚠️ Usa PAT si existe; si no, usa GITHUB_TOKEN
+      - name: Create GitHub Release (gh CLI)
+        env:
+          GH_TOKEN: ${{ secrets.GH_RELEASE_TOKEN != '' && secrets.GH_RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG="${{ steps.tag.outputs.tag }}"
+          # si el release ya existe, actualiza assets; si no, créalo
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG ya existe; actualizando assets…"
+            gh release upload "$TAG" dist.tar.gz --clobber
+          else
+            echo "Creando release $TAG…"
+            gh release create "$TAG" dist.tar.gz -t "$TAG" -n "Automated release for $TAG"
+          fi

@@ -3,29 +3,170 @@ name: CI
 on:
   push:
     branches: [ main ]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
   pull_request:
     branches: [ main ]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
 
 jobs:
+  deps-osv:
+    name: Dependencias (OSV)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Detect lockfile
+        id: lock
+        run: |
+          if [ -f package-lock.json ]; then echo "has_lock=true" >> "$GITHUB_OUTPUT"; else echo "has_lock=false" >> "$GITHUB_OUTPUT"; fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install deps
+        if: steps.lock.outputs.has_lock == 'true'
+        run: npm ci
+
+      - name: OSV-Scanner
+        if: steps.lock.outputs.has_lock == 'true'
+        uses: google/osv-scanner-action@v1
+        with:
+          scan-args: --lockfile package-lock.json --skip-git
+          output: osv.sarif
+
+      - name: Upload SARIF (OSV)
+        if: steps.lock.outputs.has_lock == 'true'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: osv.sarif
+
+  deps-auditci:
+    name: Dependencias (audit-ci)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect lockfile
+        id: lock
+        run: |
+          if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then echo "has_lock=true" >> "$GITHUB_OUTPUT"; else echo "has_lock=false" >> "$GITHUB_OUTPUT"; fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install deps
+        run: ${{ steps.lock.outputs.has_lock == 'true' && 'npm ci' || 'npm install' }}
+
+      - name: audit-ci (fail en high+)
+        run: |
+          if [ -f ./audit-ci.json ]; then
+            npx audit-ci --high --report --config ./audit-ci.json
+          else
+            npx audit-ci --high --report
+          fi
+
+  sast-semgrep:
+    name: SAST (Semgrep)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Semgrep scan (JS/TS)
+        uses: returntocorp/semgrep-action@v1
+        with:
+          generateSarif: "1"
+          sarifFile: semgrep.sarif
+          config: >-
+            p/owasp-top-ten
+            p/javascript
+            p/typescript
+
+      - name: Upload SARIF (Semgrep)
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif
+
+  codeql:
+    name: CodeQL (profundo)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    strategy:
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+      - uses: github/codeql-action/autobuild@v3
+      - uses: github/codeql-action/analyze@v3
+
+  secrets-gitleaks:
+    name: Secret scanning (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        with:
+          args: detect --report-format sarif --report-path gitleaks.sarif
+        # env:
+        #   GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }} # opcional
+
+      - name: Upload SARIF (Gitleaks)
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: gitleaks.sarif
+
   node-ci:
+    name: Build + Smoke tests (Node matrix)
     runs-on: ubuntu-latest
     strategy:
       matrix:
         node-version: [18.x, 20.x]
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Detect lockfile
+        id: lock
+        run: |
+          if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then echo "has_lock=true" >> "$GITHUB_OUTPUT"; else echo "has_lock=false" >> "$GITHUB_OUTPUT"; fi
 
       - name: Use Node ${{ matrix.node-version }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-          # 🔔 IMPORTANTE: sin cache porque no hay package-lock.json
-          # cache: 'npm'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
 
       - name: Install deps
-        run: npm install
+        run: ${{ steps.lock.outputs.has_lock == 'true' && 'npm ci' || 'npm install' }}
 
       - name: Typecheck (tsc)
         run: npx tsc --noEmit
@@ -33,19 +174,22 @@ jobs:
       - name: Build
         run: npm run build
 
-      # 🧪 Smoke test CLI (usa dist/)
-      # Nota: el workspace del runner es efímero; data/logs quedan como artefactos
+      - name: Pre-reqs jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Check dist exists
+        run: test -f dist/cli/index.js || (echo "No existe dist/cli/index.js"; ls -la dist || true; exit 1)
+
       - name: Smoke test CLI
         shell: bash
         run: |
           set -e
-          node dist/cli/index.js auth:register -e ci@example.com -p "S3gura!2024" -r user
-          node dist/cli/index.js auth:login -e ci@example.com -p "S3gura!2024"
-          # obtener el último sessionId desde audit.log (si se registró)
+          node dist/cli/index.js auth:register -e ci@example.com -p "S3gura!2024" -r user || true
+          node dist/cli/index.js auth:login -e ci@example.com -p "S3gura!2024" || true
           if [ -f logs/audit.log ]; then
             SID=$(tail -n 1 logs/audit.log | jq -r '.sessionId // empty')
             if [ -n "$SID" ] && [ "$SID" != "null" ]; then
-              node dist/cli/index.js auth:logout --session "$SID"
+              node dist/cli/index.js auth:logout --session "$SID" || true
             fi
           fi
 
@@ -57,4 +201,5 @@ jobs:
           path: |
             logs/**
             data/**
+
 

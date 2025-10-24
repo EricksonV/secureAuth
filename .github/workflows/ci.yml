@@ -21,7 +21,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-          cache: 'npm'
+          # 🔔 IMPORTANTE: sin cache porque no hay package-lock.json
+          # cache: 'npm'
 
       - name: Install deps
         run: npm install
@@ -33,19 +34,22 @@ jobs:
         run: npm run build
 
       # 🧪 Smoke test CLI (usa dist/)
-      # Nota: escribe archivos en ./data y ./logs del workspace efímero del runner
+      # Nota: el workspace del runner es efímero; data/logs quedan como artefactos
       - name: Smoke test CLI
+        shell: bash
         run: |
           set -e
           node dist/cli/index.js auth:register -e ci@example.com -p "S3gura!2024" -r user
           node dist/cli/index.js auth:login -e ci@example.com -p "S3gura!2024"
-          # logout del último id de sesión (simple parse)
-          SID=$(tail -n 1 logs/audit.log | jq -r '.sessionId // empty')
-          if [ -n "$SID" ]; then
-            node dist/cli/index.js auth:logout --session "$SID"
+          # obtener el último sessionId desde audit.log (si se registró)
+          if [ -f logs/audit.log ]; then
+            SID=$(tail -n 1 logs/audit.log | jq -r '.sessionId // empty')
+            if [ -n "$SID" ] && [ "$SID" != "null" ]; then
+              node dist/cli/index.js auth:logout --session "$SID"
+            fi
           fi
 
-      - name: Publicar artefactos (logs)
+      - name: Publicar artefactos (logs y data)
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -53,3 +57,4 @@ jobs:
           path: |
             logs/**
             data/**
+

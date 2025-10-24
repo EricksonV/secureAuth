@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - 'v*'   # se ejecuta cuando se hace push de un tag que empieza con v (p.ej. v1.0.0)
 
 jobs:
   build-and-release:
@@ -13,14 +13,43 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Use Node
+      # Detectar si existe lockfile (package-lock.json / npm-shrinkwrap.json / yarn.lock)
+      - name: Detect lockfile
+        id: detect-lock
+        shell: bash
+        run: |
+          if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ] || [ -f yarn.lock ]; then
+            echo "has_lock=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_lock=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Setup Node con cache SOLO si hay lockfile
+      - name: Use Node (with cache)
+        if: steps.detect-lock.outputs.has_lock == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 20.x
           cache: 'npm'
 
-      - name: Install deps
+      # Setup Node SIN cache si no hay lockfile
+      - name: Use Node (no cache)
+        if: steps.detect-lock.outputs.has_lock != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+
+      # Instalar dependencias (ci con lockfile, install sin lockfile)
+      - name: Install deps (npm ci)
+        if: steps.detect-lock.outputs.has_lock == 'true'
         run: npm ci
+
+      - name: Install deps (npm install)
+        if: steps.detect-lock.outputs.has_lock != 'true'
+        run: npm install
+
+      - name: Typecheck
+        run: npx tsc --noEmit
 
       - name: Build
         run: npm run build
@@ -34,5 +63,8 @@ jobs:
         with:
           artifacts: "dist.tar.gz"
           token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ github.ref_name }}            # usa el tag que disparó el flujo (vX.Y.Z)
+          name: ${{ github.ref_name }}           # nombre del release = tag
           draft: false
           prerelease: false
+

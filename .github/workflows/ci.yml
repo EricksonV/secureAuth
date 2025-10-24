@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  node-ci:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Typecheck (tsc)
+        run: npx tsc --noEmit
+
+      - name: Build
+        run: npm run build
+
+      # 🧪 Smoke test CLI (usa dist/)
+      # Nota: escribe archivos en ./data y ./logs del workspace efímero del runner
+      - name: Smoke test CLI
+        run: |
+          set -e
+          node dist/cli/index.js auth:register -e ci@example.com -p "S3gura!2024" -r user
+          node dist/cli/index.js auth:login -e ci@example.com -p "S3gura!2024"
+          # logout del último id de sesión (simple parse)
+          SID=$(tail -n 1 logs/audit.log | jq -r '.sessionId // empty')
+          if [ -n "$SID" ]; then
+            node dist/cli/index.js auth:logout --session "$SID"
+          fi
+
+      - name: Publicar artefactos (logs)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-logs-${{ matrix.node-version }}
+          path: |
+            logs/**
+            data/**
